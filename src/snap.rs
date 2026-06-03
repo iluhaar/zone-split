@@ -6,11 +6,7 @@ pub fn snap_target(window_center: (i32, i32), zones: &[Zone]) -> Option<u32> {
 }
 
 /// Only snap if window_center is within threshold pixels of any edge of the target zone.
-pub fn snap_if_near_edge(
-    window_center: (i32, i32),
-    zones: &[Zone],
-    threshold: i32,
-) -> Option<u32> {
+pub fn snap_if_near_edge(window_center: (i32, i32), zones: &[Zone], threshold: i32) -> Option<u32> {
     let target_id = snap_target(window_center, zones)?;
     let zone = zones.iter().find(|z| z.id == target_id)?;
     let r = zone.rect;
@@ -46,10 +42,7 @@ mod tests {
 
     #[test]
     fn test_snap_target_basic() {
-        let zones = vec![
-            make_zone(1, 0, 0, 100, 100),
-            make_zone(2, 200, 0, 300, 100),
-        ];
+        let zones = vec![make_zone(1, 0, 0, 100, 100), make_zone(2, 200, 0, 300, 100)];
         assert_eq!(snap_target((40, 50), &zones), Some(1));
         assert_eq!(snap_target((260, 50), &zones), Some(2));
     }

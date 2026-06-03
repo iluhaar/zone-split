@@ -150,10 +150,7 @@ mod tests {
 
     #[test]
     fn test_hit_test_overlap_last_wins() {
-        let zones = vec![
-            make_zone(1, 0, 0, 100, 100),
-            make_zone(2, 50, 50, 150, 150),
-        ];
+        let zones = vec![make_zone(1, 0, 0, 100, 100), make_zone(2, 50, 50, 150, 150)];
         // Point in overlap: last in vec (id=2) wins
         assert_eq!(hit_test((75, 75), &zones), Some(2));
         // Point only in first zone

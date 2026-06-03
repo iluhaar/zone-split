@@ -14,12 +14,7 @@ impl WindowManager {
 
     /// If hwnd not in saved map: save current rect, expand to zone_rect.
     /// If hwnd in saved map: restore saved rect, remove from map.
-    pub fn toggle(
-        &mut self,
-        hwnd: HWND,
-        zone_rect: RECT,
-        ops: &impl WindowOps,
-    ) -> ops::Result<()> {
+    pub fn toggle(&mut self, hwnd: HWND, zone_rect: RECT, ops: &impl WindowOps) -> ops::Result<()> {
         let key = hwnd as isize;
         if let Some(saved_rect) = self.saved.remove(&key) {
             // Restore
