@@ -57,6 +57,7 @@ fn windows_main() -> ops::Result<()> {
 
     let ops = ops::Win32Ops;
     let mut wm = wm::WindowManager::new();
+    let _overlay_ui = overlay::win::OverlayUi::new()?;
     let mut msg = MSG::default();
 
     while unsafe { GetMessageW(&mut msg, HWND::default(), 0, 0).as_bool() } {
