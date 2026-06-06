@@ -1,6 +1,7 @@
 #[cfg(windows)]
 pub mod win {
     use crate::ops;
+    use std::sync::atomic::{AtomicIsize, Ordering};
     use windows::core::w;
     use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::Graphics::Gdi::{
@@ -8,98 +9,229 @@ pub mod win {
         MoveToEx, SelectObject, TextOutW, HBRUSH, HDC, PAINTSTRUCT, PS_SOLID,
     };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{SetFocus, VK_ESCAPE, VK_RETURN};
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, GetSystemMetrics, RegisterClassW,
-        SetLayeredWindowAttributes, ShowWindow, CS_HREDRAW, CS_VREDRAW, LWA_ALPHA, SM_CXSCREEN,
-        SM_CYSCREEN, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_PAINT, WNDCLASSW,
-        WS_DISABLED, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+        SetLayeredWindowAttributes, ShowWindow, CS_HREDRAW, CS_VREDRAW, HMENU, LWA_ALPHA,
+        SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND,
+        WM_KEYDOWN, WM_PAINT, WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_WINDOWEDGE,
+        WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
     };
 
-    const CLASS_NAME: windows::core::PCWSTR = w!("ZoneSplitOverlayWindow");
+    const PICKER_CLASS: windows::core::PCWSTR = w!("ZoneSplitPickerWindow");
+    const OVERLAY_CLASS: windows::core::PCWSTR = w!("ZoneSplitOverlayWindow");
+    const BUTTON_SPLIT_50: isize = 1001;
 
-    pub struct Overlay {
-        hwnd: HWND,
-        visible: bool,
+    static PICKER_HWND: AtomicIsize = AtomicIsize::new(0);
+    static OVERLAY_HWND: AtomicIsize = AtomicIsize::new(0);
+
+    pub struct OverlayUi {
+        picker_hwnd: HWND,
+        overlay_hwnd: HWND,
     }
 
-    impl Overlay {
-        pub fn new_primary_split() -> ops::Result<Self> {
+    impl OverlayUi {
+        pub fn new() -> ops::Result<Self> {
             let hinstance = unsafe { GetModuleHandleW(None) }
                 .map_err(|err| format!("GetModuleHandleW failed: {err}"))?;
 
-            let class = WNDCLASSW {
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(wnd_proc),
-                hInstance: hinstance.into(),
-                lpszClassName: CLASS_NAME,
-                ..Default::default()
-            };
+            register_class(PICKER_CLASS, Some(picker_wnd_proc))?;
+            register_class(OVERLAY_CLASS, Some(overlay_wnd_proc))?;
 
-            unsafe {
-                RegisterClassW(&class);
-            }
+            let screen_width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+            let picker_width = 380;
+            let picker_height = 180;
+            let picker_x = (screen_width - picker_width) / 2;
 
-            let width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
-            let height = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-
-            let hwnd = unsafe {
+            let picker_hwnd = unsafe {
                 CreateWindowExW(
-                    WINDOW_EX_STYLE(
-                        WS_EX_LAYERED.0
-                            | WS_EX_TRANSPARENT.0
-                            | WS_EX_TOPMOST.0
-                            | WS_EX_TOOLWINDOW.0,
-                    ),
-                    CLASS_NAME,
-                    w!("zone-split zones"),
-                    WINDOW_STYLE(WS_POPUP.0 | WS_DISABLED.0),
-                    0,
-                    0,
-                    width,
-                    height,
+                    WS_EX_WINDOWEDGE,
+                    PICKER_CLASS,
+                    w!("zone-split overlays"),
+                    WS_OVERLAPPEDWINDOW,
+                    picker_x,
+                    120,
+                    picker_width,
+                    picker_height,
                     None,
                     None,
                     hinstance,
                     None,
                 )
-                .map_err(|err| format!("CreateWindowExW overlay failed: {err}"))?
+                .map_err(|err| format!("CreateWindowExW picker failed: {err}"))?
             };
 
             unsafe {
-                SetLayeredWindowAttributes(hwnd, COLORREF(0), 150, LWA_ALPHA)
-                    .map_err(|err| format!("SetLayeredWindowAttributes failed: {err}"))?;
-                let _ = ShowWindow(hwnd, SW_SHOW);
+                CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    w!("BUTTON"),
+                    w!("50% / 50% Split"),
+                    WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0),
+                    32,
+                    48,
+                    300,
+                    56,
+                    picker_hwnd,
+                    HMENU(BUTTON_SPLIT_50 as *mut std::ffi::c_void),
+                    hinstance,
+                    None,
+                )
+                .map_err(|err| format!("CreateWindowExW split button failed: {err}"))?;
+            }
+
+            let overlay_hwnd = create_overlay_window()?;
+
+            PICKER_HWND.store(picker_hwnd.0 as isize, Ordering::Relaxed);
+            OVERLAY_HWND.store(overlay_hwnd.0 as isize, Ordering::Relaxed);
+
+            unsafe {
+                let _ = ShowWindow(picker_hwnd, SW_SHOW);
+                let _ = SetFocus(picker_hwnd);
             }
 
             Ok(Self {
-                hwnd,
-                visible: true,
+                picker_hwnd,
+                overlay_hwnd,
             })
         }
-
-        pub fn toggle(&mut self) {
-            self.visible = !self.visible;
-            unsafe {
-                let _ = ShowWindow(self.hwnd, if self.visible { SW_SHOW } else { SW_HIDE });
-            }
-        }
     }
 
-    impl Drop for Overlay {
+    impl Drop for OverlayUi {
         fn drop(&mut self) {
             unsafe {
-                let _ = DestroyWindow(self.hwnd);
+                let _ = DestroyWindow(self.overlay_hwnd);
+                let _ = DestroyWindow(self.picker_hwnd);
             }
         }
     }
 
-    extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    fn register_class(
+        class_name: windows::core::PCWSTR,
+        wnd_proc: windows::Win32::UI::WindowsAndMessaging::WNDPROC,
+    ) -> ops::Result<()> {
+        let hinstance = unsafe { GetModuleHandleW(None) }
+            .map_err(|err| format!("GetModuleHandleW failed: {err}"))?;
+        let class = WNDCLASSW {
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: wnd_proc,
+            hInstance: hinstance.into(),
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+
+        unsafe {
+            RegisterClassW(&class);
+        }
+
+        Ok(())
+    }
+
+    fn create_overlay_window() -> ops::Result<HWND> {
+        let hinstance = unsafe { GetModuleHandleW(None) }
+            .map_err(|err| format!("GetModuleHandleW failed: {err}"))?;
+        let width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+        let height = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(WS_EX_LAYERED.0 | WS_EX_TOPMOST.0),
+                OVERLAY_CLASS,
+                w!("zone-split zones"),
+                WS_POPUP,
+                0,
+                0,
+                width,
+                height,
+                None,
+                None,
+                hinstance,
+                None,
+            )
+            .map_err(|err| format!("CreateWindowExW overlay failed: {err}"))?
+        };
+
+        unsafe {
+            SetLayeredWindowAttributes(hwnd, COLORREF(0), 150, LWA_ALPHA)
+                .map_err(|err| format!("SetLayeredWindowAttributes failed: {err}"))?;
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        }
+
+        Ok(hwnd)
+    }
+
+    extern "system" fn picker_wnd_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        match msg {
+            WM_COMMAND if command_id(wparam) == BUTTON_SPLIT_50 => {
+                show_overlay();
+                LRESULT(0)
+            }
+            WM_KEYDOWN if wparam.0 as u16 == VK_ESCAPE.0 => {
+                let _ = unsafe { ShowWindow(hwnd, SW_SHOW) };
+                LRESULT(0)
+            }
+            _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        }
+    }
+
+    extern "system" fn overlay_wnd_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
         match msg {
             WM_PAINT => {
                 paint_overlay(hwnd);
                 LRESULT(0)
             }
+            WM_KEYDOWN if wparam.0 as u16 == VK_RETURN.0 => {
+                hide_overlay();
+                LRESULT(0)
+            }
+            WM_KEYDOWN if wparam.0 as u16 == VK_ESCAPE.0 => {
+                hide_overlay();
+                show_picker();
+                LRESULT(0)
+            }
             _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        }
+    }
+
+    fn command_id(wparam: WPARAM) -> isize {
+        (wparam.0 & 0xffff) as isize
+    }
+
+    fn hwnd_from_key(key: isize) -> HWND {
+        HWND(key as *mut std::ffi::c_void)
+    }
+
+    fn show_overlay() {
+        let overlay = hwnd_from_key(OVERLAY_HWND.load(Ordering::Relaxed));
+        let picker = hwnd_from_key(PICKER_HWND.load(Ordering::Relaxed));
+        unsafe {
+            let _ = ShowWindow(picker, SW_HIDE);
+            let _ = ShowWindow(overlay, SW_SHOW);
+            let _ = SetFocus(overlay);
+        }
+    }
+
+    fn hide_overlay() {
+        let overlay = hwnd_from_key(OVERLAY_HWND.load(Ordering::Relaxed));
+        unsafe {
+            let _ = ShowWindow(overlay, SW_HIDE);
+        }
+    }
+
+    fn show_picker() {
+        let picker = hwnd_from_key(PICKER_HWND.load(Ordering::Relaxed));
+        unsafe {
+            let _ = ShowWindow(picker, SW_SHOW);
+            let _ = SetFocus(picker);
         }
     }
 

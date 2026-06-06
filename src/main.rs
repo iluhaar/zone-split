@@ -31,7 +31,7 @@ fn run() {
 fn windows_main() -> ops::Result<()> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, VK_LEFT, VK_RIGHT, VK_SPACE, VK_UP,
+        MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, VK_LEFT, VK_RIGHT, VK_UP,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, GetMessageW, TranslateMessage, MSG, WM_HOTKEY,
@@ -40,7 +40,6 @@ fn windows_main() -> ops::Result<()> {
     const HOTKEY_LEFT: i32 = 1;
     const HOTKEY_RIGHT: i32 = 2;
     const HOTKEY_FULL: i32 = 3;
-    const HOTKEY_OVERLAY: i32 = 4;
 
     log_event("zone-split starting");
 
@@ -55,26 +54,16 @@ fn windows_main() -> ops::Result<()> {
         "right",
     )?;
     register_hotkey(HOTKEY_FULL, VK_UP.0 as u32, preferred, fallback, "full")?;
-    register_hotkey(
-        HOTKEY_OVERLAY,
-        VK_SPACE.0 as u32,
-        fallback,
-        fallback,
-        "overlay",
-    )?;
 
     let ops = ops::Win32Ops;
     let mut wm = wm::WindowManager::new();
-    let mut overlay = overlay::win::Overlay::new_primary_split()?;
+    let _overlay_ui = overlay::win::OverlayUi::new()?;
     let mut msg = MSG::default();
 
     while unsafe { GetMessageW(&mut msg, HWND::default(), 0, 0).as_bool() } {
         if msg.message == WM_HOTKEY {
             let hotkey_id = msg.wParam.0 as i32;
-            if hotkey_id == HOTKEY_OVERLAY {
-                overlay.toggle();
-                log_event("toggled zone overlay");
-            } else if let Err(err) = handle_hotkey(hotkey_id, &ops, &mut wm) {
+            if let Err(err) = handle_hotkey(hotkey_id, &ops, &mut wm) {
                 eprintln!("hotkey failed: {err}");
                 log_event(&format!("hotkey failed: {err}"));
             }
